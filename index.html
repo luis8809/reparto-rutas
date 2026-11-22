@@ -87,6 +87,11 @@ select{max-width:100%}
 .rev .wide{grid-column:1/-1}
 .rev .acts{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .rev .src{font-size:12px;color:var(--muted)}
+.share{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0;background:var(--bg)}
+.share b{margin-right:4px}
+body.driver main > section:not(#driverSec), body.driver .actions{display:none}
+.big{font-size:17px;padding:12px 18px}
+.dnav{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
 .pin{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;color:#fff;font:700 12px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);background:#0b62d6}
 .pin.R{background:#d9480f} .pin.M{background:#7c3aed} .pin.depot{background:#111;border-radius:6px}
 .pin.warn{outline:3px solid #f5b400}
@@ -163,7 +168,21 @@ select{max-width:100%}
     <p class="hint" id="hint"></p>
     <div class="itin" id="itin"></div>
     <div class="links" id="links"></div>
+    <div class="share" id="share" hidden>
+      <b>Enviar ruta al repartidor:</b>
+      <button id="shWa">WhatsApp</button><button id="shMail">Email</button>
+      <button id="shNative" hidden>Compartir…</button><button id="shCopy">Copiar enlace</button>
+      <span class="status" id="shMsg"></span>
+    </div>
     <div class="stops" id="stops"></div>
+  </section>
+
+  <section id="driverSec" hidden>
+    <div class="kpis" id="dkpis"></div>
+    <div class="dnav"><button class="primary big" id="dnext">Ir a la siguiente parada</button><span class="status" id="dprog"></span></div>
+    <div id="dmapSlot"></div>
+    <div class="links" id="dlinks"></div>
+    <div class="stops" id="dstops"></div>
   </section>
 </main>
 
@@ -602,7 +621,7 @@ function drawMap(order){
   order.forEach((s, i) => {
     if (!s.geo?.lat) return;
     const warn = s.geo.level !== "ok" ? " warn" : "";
-    const mk = L.marker([s.geo.lat, s.geo.lon], { draggable: true,
+    const mk = L.marker([s.geo.lat, s.geo.lon], { draggable: !state.driver,
       icon: L.divIcon({ className: "", html: `<div class="pin ${s.kind}${warn}">${state.route ? i+1 : "•"}</div>`, iconSize: [26,26] }) })
       .bindPopup(`<b>${esc(s.names)}</b><br>${esc(s.addr)} · ${esc(s.zip)}`).addTo(layer);
     mk.on("dragend", () => {
@@ -661,7 +680,8 @@ function render(){
       `<a class="btn" target="_blank" rel="noopener" href="${esc(l.url)}">Google Maps ${links.length > 1 ? `tramo ${i+1} (${l.from === 0 ? "almacén" : "parada " + l.from} → ${l.to === pts.length-1 ? "almacén" : "parada " + l.to})` : "(ruta completa)"}</a>`
     ).join("") + `<button id="csv">Exportar CSV</button>`;
     $("#csv").onclick = exportCsv;
-  } else $("#links").innerHTML = "";
+    $("#share").hidden = false; prepareShare();
+  } else { $("#links").innerHTML = ""; $("#share").hidden = true; }
 
   $("#stops").innerHTML = order.map((s, i) => {
     const r = sch?.rows[i];
@@ -888,6 +908,129 @@ $("#addAll").onclick = () => addDocs(state.pending.map((_, i) => i));
 $("#discardAll").onclick = () => { state.pending = []; renderReview(); };
 $("#docs").addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) readDocs(fs); });
 
+// ---------- Enviar la ruta al repartidor ----------
+// La ruta viaja comprimida dentro del enlace (tras '#'): no se guarda en ningún servidor.
+const APP_URL = "https://luis8809.github.io/reparto-rutas/";
+const b64u = {
+  enc: u8 => { let t = ""; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+               return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); },
+  dec: t => { t = t.replace(/-/g, "+").replace(/_/g, "/"); t += "=".repeat((4 - t.length % 4) % 4);
+              return Uint8Array.from(atob(t), c => c.charCodeAt(0)); },
+};
+async function pack(obj){
+  const st = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return b64u.enc(new Uint8Array(await new Response(st).arrayBuffer()));
+}
+async function unpack(code){
+  const st = new Blob([b64u.dec(code)]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return JSON.parse(await new Response(st).text());
+}
+const KIND_TXT = { E: "ENTREGA", R: "RECOGIDA", M: "ENT+REC" };
+function routePayload(){
+  const sch = schedule(), r5 = n => Math.round(n * 1e5) / 1e5;
+  return {
+    v: 1, d: new Date().toLocaleDateString("es-ES"), t: state.trip, s: $("#start").value,
+    km: Math.round(sch.dist / 1000), end: Math.round(sch.end), ap: state.route.approx ? 1 : 0,
+    a: { q: state.depot.query, la: r5(state.depot.geo.lat), lo: r5(state.depot.geo.lon) },
+    p: sch.rows.map(x => { const s = x.s; return {
+      n: s.names, k: s.kind, a: s.addr, z: s.zip, x: s.extra || "", la: r5(s.geo.lat), lo: r5(s.geo.lon),
+      nv: s.geo.level === "ok" ? "" : navDest(s), eta: Math.round(x.arrive),
+      w: s.window ? fmtMin(s.window.from) + "–" + fmtMin(s.window.to) : "", b: s.qty, e: Math.round(s.kgE), r: Math.round(s.kgR),
+      no: s.notes, tl: s.tailLift ? 1 : 0, ref: s.items.map(i => i.ref).filter(Boolean).join(" ") }; }),
+  };
+}
+function routeText(d, url, short){
+  const head = `Ruta de reparto ${d.d}${d.t ? " · viaje " + d.t : ""} · ${d.p.length} paradas · salida ${d.s}`;
+  const lines = d.p.map((p, i) => `${i + 1}. ${fmtMin(p.eta)} ${KIND_TXT[p.k]} ${p.n} – ${p.a}, ${p.z}`).join("\n");
+  return `${head}\n${short ? "" : "\n" + lines + "\n"}\nAbrir la ruta en el móvil:\n${url}`;
+}
+let share = null;
+async function prepareShare(){
+  try {
+    const d = routePayload();
+    const base = location.protocol.startsWith("http") ? location.origin + location.pathname : APP_URL;
+    const url = base + "#r=" + await pack(d);
+    share = { d, url };
+    $("#shNative").hidden = !navigator.share;
+    $("#shMsg").textContent = "";
+  } catch (e) { share = null; $("#shMsg").textContent = "No se pudo preparar el enlace: " + e.message; }
+}
+$("#shWa").onclick = () => {
+  if (!share) return;
+  let text = routeText(share.d, share.url, false);
+  if (text.length > 6000) text = routeText(share.d, share.url, true);
+  window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank", "noopener");
+};
+$("#shMail").onclick = () => {
+  if (!share) return;
+  const subj = encodeURIComponent(`Ruta de reparto ${share.d.d}`);
+  let body = encodeURIComponent(routeText(share.d, share.url, false));
+  if (body.length > 1800) body = encodeURIComponent(routeText(share.d, share.url, true));
+  location.href = `mailto:?subject=${subj}&body=${body}`;
+};
+$("#shNative").onclick = () => share && navigator.share({ title: "Ruta de reparto " + share.d.d, text: routeText(share.d, "", true).replace(/\nAbrir.*$/s, ""), url: share.url }).catch(() => {});
+$("#shCopy").onclick = async () => {
+  if (!share) return;
+  try { await navigator.clipboard.writeText(share.url); $("#shMsg").textContent = "Enlace copiado."; }
+  catch { prompt("Copia este enlace:", share.url); }
+};
+
+// ---------- Modo repartidor (al abrir un enlace con #r=) ----------
+const driverDest = s => s.p.nv || ll(s.geo);
+async function enterDriver(code){
+  let d;
+  try { d = await unpack(code); }
+  catch { setStatus("El enlace de la ruta está incompleto o dañado. Pide que te lo reenvíen."); return; }
+  document.body.classList.add("driver");
+  $("#driverSec").hidden = false;
+  $("#dmapSlot").appendChild($("#map")); $("#dmapSlot").appendChild($("#mapMsg"));
+  d.id = "ddone:" + code.length + ":" + code.slice(-24);
+  state.driver = d;
+  state.depot = { query: d.a.q, geo: { lat: d.a.la, lon: d.a.lo, level: "ok" } };
+  const stops = d.p.map((p, i) => ({ id: i, key: String(i), p, names: p.n, kind: p.k, addr: p.a, zip: p.z, query: p.nv, geo: { lat: p.la, lon: p.lo, level: p.nv ? "cp" : "ok" } }));
+  const pts = [state.depot.geo, ...stops.map(s => s.geo), state.depot.geo];
+  state.route = { order: stops, geometry: pts.map(x => [x.lat, x.lon]), approx: true };
+  renderDriver();
+  try {   // trazado real por carretera si el servidor de rutas responde
+    const j = await (await fetch(`https://router.project-osrm.org/route/v1/driving/${pts.map(x => x.lon.toFixed(5) + "," + x.lat.toFixed(5)).join(";")}?overview=full&geometries=geojson`)).json();
+    if (j.code === "Ok"){ state.route.geometry = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]); state.route.approx = false; drawMap(stops); }
+  } catch {}
+}
+function renderDriver(){
+  const d = state.driver, order = state.route.order, done = store.get(d.id) || {};
+  const nDone = order.filter(s => done[s.key]).length, next = order.find(s => !done[s.key]);
+  $("#tripLabel").textContent = `Ruta del ${d.d}${d.t ? " · viaje " + d.t : ""}`;
+  $("#dkpis").innerHTML = `
+    <div class="kpi"><b>${nDone}/${order.length}</b><span>paradas hechas</span></div>
+    <div class="kpi"><b>${d.s}</b><span>salida del almacén</span></div>
+    <div class="kpi"><b>${fmtMin(d.end)}</b><span>regreso previsto</span></div>
+    <div class="kpi"><b>${d.km} km</b><span>${d.ap ? "estimados" : "distancia total"}</span></div>`;
+  $("#dprog").textContent = next ? `Siguiente: ${order.indexOf(next) + 1}. ${next.names}` : "Ruta completada.";
+  $("#dnext").disabled = !next;
+  $("#dnext").onclick = () => next && window.open("https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(driverDest(next)), "_blank", "noopener");
+  const links = gmapsLinks([ll(state.depot.geo), ...order.map(driverDest), ll(state.depot.geo)]);
+  $("#dlinks").innerHTML = links.map((l, i) => `<a class="btn" target="_blank" rel="noopener" href="${esc(l.url)}">Ruta en Google Maps${links.length > 1 ? ` (tramo ${i + 1})` : ""}</a>`).join("");
+  $("#dstops").innerHTML = order.map((s, i) => { const p = s.p, isDone = done[s.key]; return `
+    <div class="stop ${s.kind}${isDone ? " done" : ""}">
+      <div class="num">${i + 1}</div>
+      <div><span class="tag ${s.kind}">${KIND_TXT[s.kind]}</span><span class="title">${esc(p.n)}</span></div>
+      <div class="right">
+        <span class="eta">${fmtMin(p.eta)}</span>
+        <a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(driverDest(s))}">Navegar</a>
+        <label style="flex-direction:row;align-items:center"><input type="checkbox" data-ddone="${s.key}" ${isDone ? "checked" : ""}> hecho</label>
+      </div>
+      <div class="meta">${esc(p.a)} · ${esc(p.z)}${p.x ? " · " + esc(p.x) : ""}</div>
+      <div class="meta">${esc(p.b)}${p.e ? ` · entrega ${fmtKg(p.e)}` : ""}${p.r ? ` · recoge ${fmtKg(p.r)}` : ""}${p.w ? " · Ventana " + esc(p.w) : ""}${p.tl ? " · <b>necesita trampilla</b>" : ""}</div>
+      ${p.no || p.ref ? `<div class="notes">${esc([p.no, p.ref && "Ref: " + p.ref].filter(Boolean).join("\n"))}</div>` : ""}
+    </div>`; }).join("");
+  drawMap(order);
+}
+$("#dstops").addEventListener("change", e => {
+  const k = e.target.dataset.ddone; if (k === undefined) return;
+  const d = state.driver, done = store.get(d.id) || {};
+  done[k] = e.target.checked; store.set(d.id, done); renderDriver();
+});
+
 // ---------- Eventos ----------
 $("#file").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -946,6 +1089,9 @@ $("#stops").addEventListener("change", e => {
   const done = store.get("done:" + state.trip) || {};
   done[key] = e.target.checked; store.set("done:" + state.trip, done); render();
 });
+
+if (location.hash.startsWith("#r=")) enterDriver(location.hash.slice(3));
+window.addEventListener("hashchange", () => location.reload());
 </script>
 </body>
 </html>

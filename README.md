@@ -9,6 +9,9 @@ App web (un solo `index.html`, sin servidor ni claves) para planificar la ruta d
 4. Revisa las paradas en amarillo: edita la dirección o arrastra el pin. Las correcciones se guardan en el navegador.
 5. Pulsa **Calcular ruta**: orden de paradas, ETA, ventanas horarias, carga del camión, enlaces a Google Maps y exportación CSV.
 
+## Enviar la ruta al repartidor
+Tras calcular la ruta, «Enviar ruta al repartidor» (WhatsApp, email, Compartir o Copiar enlace) genera un enlace con la ruta comprimida tras `#r=`. El repartidor lo abre en el móvil y ve solo su ruta: orden, horas, mapa, «Ir a la siguiente parada», Navegar por parada y marcas de «hecho» (guardadas en su móvil). La ruta no se guarda en ningún servidor: va dentro del enlace.
+
 ## Servicios usados (gratuitos, públicos)
 - Geocodificación: Nominatim (OpenStreetMap), máx. 1 petición/s, limitada a la zona de cada código postal.
 - Optimización de ruta: servidor de demostración de OSRM (sin garantías de disponibilidad).
