@@ -135,6 +135,7 @@ select{max-width:100%}
     </div>
     <div class="kpis" id="kpis"></div>
     <div id="map"></div>
+    <p class="alert" id="mapMsg"></p>
     <p class="hint">Puedes arrastrar un pin para corregir su posición. Los pines con borde amarillo están aproximados. Con ↑ ↓ cambias el orden a mano (p. ej. para cumplir una ventana horaria) y se recalculan los tiempos.</p>
     <div class="links" id="links"></div>
     <div class="stops" id="stops"></div>
@@ -478,16 +479,31 @@ let map, layer;
 function drawMap(order){
   if (!map){
     map = L.map("map");
-    // Teselas de CARTO (los servidores de openstreetmap.org bloquean páginas abiertas como archivo local)
-    const carto = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-      { maxZoom: 19, subdomains: "abcd", attribution: "© OpenStreetMap © CARTO" }).addTo(map);
-    let errors = 0;
-    carto.on("tileerror", () => {
-      if (++errors !== 5) return;   // varios fallos seguidos: cambiar a Esri
-      map.removeLayer(carto);
-      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 19, attribution: "© Esri" }).addTo(map);
-    });
+    // Fondo del mapa: varios proveedores con cambio automático si uno no carga.
+    // openstreetmap.org solo funciona si la página se sirve por web (GitHub Pages); en archivo local se bloquea.
+    const P = {
+      "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }),
+      "CARTO": L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 19, subdomains: "abcd", attribution: "© OpenStreetMap © CARTO" }),
+      "Esri": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "© Esri" }),
+    };
+    const order = location.protocol.startsWith("http") ? ["OpenStreetMap", "CARTO", "Esri"] : ["CARTO", "Esri", "OpenStreetMap"];
+    const msg = t => { $("#mapMsg").textContent = t; };
+    let idx = 0;
+    const useTiles = i => {
+      idx = i; const name = order[i], tl = P[name];
+      let ok = false, errs = 0;
+      tl.off("tileload tileerror");
+      tl.on("tileload", () => { if (!ok){ ok = true; msg(""); } });
+      tl.on("tileerror", () => {
+        if (ok || ++errs !== 4) return;
+        map.removeLayer(tl);
+        if (idx + 1 < order.length){ msg(`El mapa de ${name} no carga; probando ${order[idx + 1]}…`); useTiles(idx + 1); }
+        else msg("No carga ningún fondo de mapa (posible bloqueo de la red o del antivirus). Los pines, la ruta y los enlaces a Google Maps siguen funcionando.");
+      });
+      tl.addTo(map);
+    };
+    useTiles(0);
+    L.control.layers(P, null, { position: "topright" }).addTo(map);
     layer = L.layerGroup().addTo(map);
     map.setView([40.42, -3.6], 10);
   }
