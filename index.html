@@ -270,6 +270,8 @@ const ADDRESS_FIXES = {
   "COMERCIAL H 2-4|28521": "CENTRO COMERCIAL H2O, RIVAS-VACIAMADRID",
   "ARES 2 LOCAL B 39-40 P|28051": "CENTRO COMERCIAL LA GAVIA, MADRID",
   "CARRETERA DE ARGANDA A CHINCHON, KM|28500": "CARRETERA DE ARGANDA A CHINCHON KM 2, ARGANDA DEL REY",
+  // CCR Logispoint: C/ Rucio 6, Ctra. Antigua de Alcalá a Ajalvir km 2,2 (P.I. Matalanca)
+  "CRTA. ANTIGUA DE ALCALÁ, AJALVI KM|28806": "CALLE RUCIO 6, ALCALA DE HENARES",
 };
 const fixKey = (addr, zip) => clean(addr).toUpperCase().replace(/\s+/g, " ") + "|" + zip;
 const queryFor = (addr, zip) => store.get("fix:" + fixKey(addr, zip)) || ADDRESS_FIXES[fixKey(addr, zip)] || cleanAddr(addr);
@@ -319,7 +321,7 @@ async function nominatim(params){
   return (await res.json())[0] || null;
 }
 
-const GEO_V = "geo3:";   // versión de caché (v2: zona del CP; v3: mismo municipio = válido)
+const GEO_V = "geo4:";   // versión de caché (v2: zona del CP; v3: mismo municipio = válido; v4: búsqueda por empresa)
 const km = (a, b) => { const r = Math.PI/180, x = Math.sin((b.lat-a.lat)*r/2)**2 + Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lon-a.lon)*r/2)**2; return 12742 * Math.asin(Math.sqrt(x)); };
 
 // Centro y municipio de un código postal (se cachea)
@@ -333,9 +335,12 @@ async function cpInfo(zip){
   store.set(k, out); return out;
 }
 
-async function geocode(query, zip){
+// Nombre de empresa sin forma jurídica ni sufijos, para buscarlo como lugar
+const bizName = n => clean(String(n || "").split(" / ")[0]).replace(/[,.]?\s*\b(S\.?\s?L\.?U?|S\.?\s?A\.?U?|S\.?\s?COOP\.?|GMBH|SPAIN|ESPA[NÑ]A)\.?\s*$/i, "").replace(/\s+-\s+/g, " ").trim();
+
+async function geocode(query, zip, company){
   const cacheKey = GEO_V + query + "|" + zip;
-  const manual = ["geo:", "geo2:"].map(v => store.get(v + query + "|" + zip)).find(g => g?.label === "Ajustado a mano");
+  const manual = ["geo:", "geo2:", "geo3:"].map(v => store.get(v + query + "|" + zip)).find(g => g?.label === "Ajustado a mano");
   const cached = store.get(cacheKey) || manual;
   if (cached) return cached;
   const cp = await cpInfo(zip);
@@ -364,6 +369,13 @@ async function geocode(query, zip){
       out = out || cand;
     }
   }
+  // Dirección no encontrada: se prueba con el nombre de la empresa dentro de la zona del CP
+  const biz = bizName(company);
+  if ((!out || out.level !== "ok") && cp && biz.length > 2){
+    const hit = await nominatim({ q: [biz, cp.town].filter(Boolean).join(", "), viewbox: [cp.lon - 0.12, cp.lat + 0.09, cp.lon + 0.12, cp.lat - 0.09].join(","), bounded: 1 });
+    if (hit && km({ lat: +hit.lat, lon: +hit.lon }, cp) <= 10)
+      out = { lat: +hit.lat, lon: +hit.lon, level: "empresa", label: hit.display_name };
+  }
   if (!out && cp) out = { lat: cp.lat, lon: cp.lon, level: "cp", label: "Centro del CP " + zip + (cp.town ? " (" + cp.town + ")" : "") };
   out = out || { level: "error" };
   if (out.level !== "error") store.set(cacheKey, out);
@@ -384,7 +396,7 @@ async function geocodeAll(onlyBad){
     let n = 0;
     for (const s of todo){
       setStatus(`Localizando direcciones… ${++n}/${todo.length}`);
-      try { s.geo = await geocode(s.query, s.zip); } catch (e) { s.geo = { level: "error", label: e.message }; }
+      try { s.geo = await geocode(s.query, s.zip, s.names); } catch (e) { s.geo = { level: "error", label: e.message }; }
       render();
     }
     const bad = state.stops.filter(s => s.geo?.level !== "ok").length;
@@ -608,7 +620,7 @@ function drawMap(order){
 function geoBadge(g){
   if (!g) return '<span class="badge warn">pendiente</span>';
   return { ok: '<span class="badge ok">localizada</span>', revisar: '<span class="badge warn">revisar (CP distinto)</span>',
-           cp: '<span class="badge warn">aprox. por CP</span>', error: '<span class="badge bad">no encontrada</span>' }[g.level] || "";
+           cp: '<span class="badge warn">aprox. por CP</span>', empresa: '<span class="badge warn">por nombre de empresa: verifica</span>', error: '<span class="badge bad">no encontrada</span>' }[g.level] || "";
 }
 
 function render(){
@@ -670,7 +682,9 @@ function render(){
       <div class="meta">${esc(s.qty)} · ${kg}${win ? " · " + win : ""}${r ? ` · carga tras parada ${fmtKg(r.load)}` : ""}${s.tailLift ? " · <b>necesita trampilla</b>" : ""}</div>
       ${r && (r.late || r.wait > 0) ? `<div class="alert" style="grid-column:2/3">${r.late ? "Llega fuera de la ventana horaria" : `Espera ${Math.round(r.wait)} min a que abra`}</div>` : ""}
       ${s.notes ? `<div class="notes">${esc(s.notes)}</div>` : ""}
-      ${showFix ? `<div class="fix"><input data-q="${s.id}" value="${esc(s.query)}" aria-label="Dirección para buscar"><button data-fix="${s.id}">Buscar</button></div>` : ""}
+      ${showFix ? `<div class="fix"><input data-q="${s.id}" value="${esc(s.query)}" aria-label="Dirección para buscar"><button data-fix="${s.id}">Buscar</button>
+        <a class="btn" target="_blank" rel="noopener" title="Busca la empresa en Google Maps para ver su dirección real"
+           href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([bizName(s.names), s.extra, s.zip].filter(Boolean).join(", "))}">Ver empresa en Google</a></div>` : ""}
     </div>`;
   }).join("");
 
@@ -921,7 +935,7 @@ $("#stops").addEventListener("click", async e => {
   s.query = $(`[data-q="${id}"]`).value.trim();
   store.set("fix:" + fixKey(s.addr, s.zip), s.query);
   e.target.disabled = true; setStatus("Buscando " + s.query + "…");
-  try { s.geo = await geocode(s.query, s.zip); } catch (err) { s.geo = { level: "error" }; }
+  try { s.geo = await geocode(s.query, s.zip, s.names); } catch (err) { s.geo = { level: "error" }; }
   state.route = null;
   setStatus(s.geo.level === "ok" ? "Dirección localizada." : "Sigue sin localizarse con precisión: prueba otra forma o arrastra el pin.");
   render();
