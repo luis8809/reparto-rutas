@@ -75,6 +75,13 @@ select{max-width:100%}
 .alert{color:var(--bad);font-weight:600;font-size:13px}
 .links{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .hint{font-size:12px;color:var(--muted);margin:6px 0 0}
+.actions{position:sticky;top:0;z-index:1100;display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.actions .status{flex:1 1 240px;min-height:0}
+.itin{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0;font-size:13px}
+.itin .step{border:1px solid var(--line);border-radius:14px;padding:2px 9px;background:var(--bg);white-space:nowrap}
+.itin .step b{margin-right:4px}
+.itin .step.R{border-color:var(--pick)} .itin .step.M{border-color:var(--mix)}
+.itin .arrow{color:var(--muted)}
 .pin{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;color:#fff;font:700 12px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);background:#0b62d6}
 .pin.R{background:#d9480f} .pin.M{background:#7c3aed} .pin.depot{background:#111;border-radius:6px}
 .pin.warn{outline:3px solid #f5b400}
@@ -122,12 +129,13 @@ select{max-width:100%}
         </select>
       </label>
     </div>
-    <div class="row" style="margin-top:12px">
-      <button class="primary" id="optimize" disabled>Calcular ruta</button>
-      <button id="regeo" disabled>Reintentar direcciones</button>
-    </div>
-    <p class="status" id="status">Carga el Excel para empezar (export de operaciones o Excel de paradas).</p>
   </section>
+
+  <div class="actions">
+    <button class="primary" id="optimize" disabled>Calcular ruta</button>
+    <button id="regeo" disabled>Reintentar direcciones</button>
+    <span class="status" id="status">Carga el Excel para empezar (export de operaciones o Excel de paradas).</span>
+  </div>
 
   <section id="resultSec" hidden>
     <div class="row" style="justify-content:space-between;margin-bottom:10px">
@@ -136,7 +144,8 @@ select{max-width:100%}
     <div class="kpis" id="kpis"></div>
     <div id="map"></div>
     <p class="alert" id="mapMsg"></p>
-    <p class="hint">Puedes arrastrar un pin para corregir su posición. Los pines con borde amarillo están aproximados. Con ↑ ↓ cambias el orden a mano (p. ej. para cumplir una ventana horaria) y se recalculan los tiempos.</p>
+    <p class="hint" id="hint"></p>
+    <div class="itin" id="itin"></div>
     <div class="links" id="links"></div>
     <div class="stops" id="stops"></div>
   </section>
@@ -166,7 +175,7 @@ function cleanAddr(a){
   s = s.replace(/\b(NAVES?|LOCAL|PUERTA|PTA\.?|PLANTA|OFICINA)\b.*$/, " ");
   s = s.replace(/,?\s*KM\.?\s*$/, "");
   s = s.replace(/^C\/\s*/, "CALLE ").replace(/\bAVDA?\.?\s+/g, "AVENIDA ").replace(/\bAV\.\s*/g, "AVENIDA ")
-       .replace(/\bCTRA\.?\s+/g, "CARRETERA ").replace(/\bPOL\.\s*/g, "POLIGONO ").replace(/\bPZA\.?\s+/g, "PLAZA ")
+       .replace(/\bC(TR|RT)A\.?\s+/g, "CARRETERA ").replace(/\bIND\.?\s+/g, "INDUSTRIAL ").replace(/\bPOL\.\s*/g, "POLIGONO ").replace(/\bPZA\.?\s+/g, "PLAZA ")
        .replace(/\bP[º°]\s*/g, "PASEO ");
   s = s.replace(/(\d+)\s*-\s*\d+/g, "$1");            // 2-4 -> 2
   s = s.replace(/,\s*(\d+)\s*,\s*\d+\s*$/, ", $1");     // "43, 45" -> "43"
@@ -294,7 +303,7 @@ async function nominatim(params){
   return (await res.json())[0] || null;
 }
 
-const GEO_V = "geo2:";   // versión de caché: v2 busca solo cerca del CP
+const GEO_V = "geo3:";   // versión de caché (v2: zona del CP; v3: mismo municipio = válido)
 const km = (a, b) => { const r = Math.PI/180, x = Math.sin((b.lat-a.lat)*r/2)**2 + Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lon-a.lon)*r/2)**2; return 12742 * Math.asin(Math.sqrt(x)); };
 
 // Centro y municipio de un código postal (se cachea)
@@ -310,8 +319,8 @@ async function cpInfo(zip){
 
 async function geocode(query, zip){
   const cacheKey = GEO_V + query + "|" + zip;
-  const old = store.get("geo:" + query + "|" + zip);
-  const cached = store.get(cacheKey) || (old?.label === "Ajustado a mano" ? old : null);
+  const manual = ["geo:", "geo2:"].map(v => store.get(v + query + "|" + zip)).find(g => g?.label === "Ajustado a mano");
+  const cached = store.get(cacheKey) || manual;
   if (cached) return cached;
   const cp = await cpInfo(zip);
   let out = null;
@@ -323,13 +332,18 @@ async function geocode(query, zip){
     const tries = [{ q: [query, zip, town].filter(Boolean).join(", "), ...area }];
     if (withDe !== query) tries.push({ q: [withDe, town].filter(Boolean).join(", "), ...area });
     tries.push({ q: [query, town].filter(Boolean).join(", "), ...area });
+    const noNum = query.replace(/,?\s*\d+\s*$/, "");          // p. ej. polígonos: sin número
+    if (noNum !== query && noNum.length > 4) tries.push({ q: [noNum, town].filter(Boolean).join(", "), ...area });
     for (const t of tries){
       const hit = await nominatim(t);
       if (!hit) continue;
       const p = { lat: +hit.lat, lon: +hit.lon };
       if (cp && km(p, cp) > 10) continue;
       const pc = hit.address?.postcode || "";
-      const cand = { ...p, level: !pc || pc === zip ? "ok" : "revisar", label: hit.display_name };
+      const a = hit.address || {};
+      // CP distinto pero mismo municipio y cerca: OSM tiene muchos CP mal asignados -> se da por buena
+      const sameTown = cp?.town && [a.city, a.town, a.village, a.municipality].includes(cp.town) && km(p, cp) < 5;
+      const cand = { ...p, level: !pc || pc === zip || sameTown ? "ok" : "revisar", label: hit.display_name };
       if (cand.level === "ok"){ out = cand; break; }
       out = out || cand;
     }
@@ -380,6 +394,39 @@ async function osrmTrip(start, stops, end){
   return { order, legs: trip.legs.map(l => ({ duration: l.duration, distance: l.distance })), geometry: trip.geometry.coordinates.map(c => [c[1], c[0]]) };
 }
 
+// Respaldo sin servidor: vecino más cercano + mejora 2-opt en línea recta (km x1,3; 40 km/h)
+function localTrip(start, stops, end){
+  const rest = stops.slice(), order = [];
+  let cur = start;
+  while (rest.length){
+    let bi = 0, bd = Infinity;
+    rest.forEach((s, i) => { const d = km(cur, s.geo); if (d < bd){ bd = d; bi = i; } });
+    cur = rest[bi].geo; order.push(rest.splice(bi, 1)[0]);
+  }
+  const path = o => [start, ...o.map(s => s.geo), ...(end ? [end] : [])];
+  const cost = o => { const p = path(o); let c = 0; for (let i = 1; i < p.length; i++) c += km(p[i-1], p[i]); return c; };
+  let best = cost(order), improved = true;
+  while (improved){
+    improved = false;
+    for (let i = 0; i < order.length - 1; i++) for (let j = i + 1; j < order.length; j++){
+      const cand = [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)];
+      const c = cost(cand);
+      if (c < best - 1e-9){ order.splice(0, order.length, ...cand); best = c; improved = true; }
+    }
+  }
+  return { order, ...localLegs(path(order)), approx: true };
+}
+function localLegs(p){
+  const legs = [];
+  for (let i = 1; i < p.length; i++){ const d = km(p[i-1], p[i]) * 1.3; legs.push({ distance: d * 1000, duration: d / 40 * 3600 }); }
+  return { legs, geometry: p.map(x => [x.lat, x.lon]) };
+}
+let routeErr = "";
+async function solve(start, stops, end){
+  try { return await osrmTrip(start, stops, end); }
+  catch (e) { routeErr = e.message; return localTrip(start, stops, end); }
+}
+
 async function optimize(){
   const missing = state.stops.filter(s => !s.geo || s.geo.level === "error");
   if (!state.depot?.geo?.lat) return setStatus("No se ha localizado el almacén. Corrige su dirección.");
@@ -391,15 +438,17 @@ async function optimize(){
     let result;
     const firstPhase = state.stops.filter(s => s.kind !== "R"), pickups = state.stops.filter(s => s.kind === "R");
     if ($("#mode").value === "mixed" || !firstPhase.length || !pickups.length){
-      result = await osrmTrip(D, state.stops, D);
+      result = await solve(D, state.stops, D);
     } else {
-      const a = await osrmTrip(D, firstPhase, null);
+      const a = await solve(D, firstPhase, null);
       const last = a.order[a.order.length - 1].geo;
-      const b = await osrmTrip(last, pickups, D);
-      result = { order: [...a.order, ...b.order], legs: [...a.legs, ...b.legs], geometry: [...a.geometry, ...b.geometry] };
+      const b = await solve(last, pickups, D);
+      result = { order: [...a.order, ...b.order], legs: [...a.legs, ...b.legs], geometry: [...a.geometry, ...b.geometry], approx: a.approx || b.approx };
     }
     state.route = result;
-    setStatus("Ruta calculada.");
+    setStatus(result.approx
+      ? `Ruta calculada en modo aproximado (el servidor de rutas no responde: ${routeErr}). Orden válido; km y tiempos estimados en línea recta.`
+      : "Ruta calculada.");
   } catch (e) {
     setStatus("Error al calcular la ruta: " + e.message);
   } finally {
@@ -419,7 +468,10 @@ async function recomputeFixedOrder(){
     state.route.legs = j.routes[0].legs.map(l => ({ duration: l.duration, distance: l.distance }));
     state.route.geometry = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
     setStatus("Orden manual aplicado.");
-  } catch (e) { setStatus("Error al recalcular: " + e.message); }
+  } catch (e) {
+    Object.assign(state.route, localLegs(pts), { approx: true });
+    setStatus("Orden manual aplicado (tiempos estimados en línea recta: el servidor de rutas no responde).");
+  }
   render();
 }
 
@@ -509,7 +561,11 @@ function drawMap(order){
   }
   layer.clearLayers();
   const bounds = [];
-  if (state.route) L.polyline(state.route.geometry, { color: "#0b62d6", weight: 4, opacity: .7 }).addTo(layer);
+  if (state.route){
+    const dash = state.route.approx ? "8 8" : null;
+    L.polyline(state.route.geometry, { color: "#fff", weight: 9, opacity: .9 }).addTo(layer);
+    L.polyline(state.route.geometry, { color: "#0b62d6", weight: 5, opacity: .95, dashArray: dash }).addTo(layer);
+  }
   if (state.depot?.geo?.lat){
     L.marker([state.depot.geo.lat, state.depot.geo.lon], { icon: L.divIcon({ className: "", html: '<div class="pin depot">A</div>', iconSize: [26,26] }) })
       .bindPopup("Almacén: " + esc(state.depot.query)).addTo(layer);
@@ -560,6 +616,15 @@ function render(){
     if (late) k += `<div class="kpi bad"><b>${late}</b><span>llegadas fuera de ventana</span></div>`;
   }
   $("#kpis").innerHTML = k;
+
+  $("#hint").textContent = sch
+    ? "La línea azul es la ruta completa (discontinua = aproximada). Con ↑ ↓ en cada parada cambias el orden a mano y se recalculan los tiempos. Puedes arrastrar un pin para corregir su posición."
+    : "Revisa las paradas en amarillo (edita la dirección o arrastra el pin) y pulsa «Calcular ruta» arriba para ver la línea de ruta y el orden.";
+  $("#itin").innerHTML = sch
+    ? `<span class="step"><b>A</b>Almacén ${$("#start").value}</span>` +
+      sch.rows.map((x, i) => `<span class="arrow">→</span><span class="step ${x.s.kind}"><b>${i + 1}</b>${esc(x.s.names.split(" / ")[0].slice(0, 22))} ${fmtMin(x.arrive)}</span>`).join("") +
+      `<span class="arrow">→</span><span class="step"><b>A</b>Almacén ${fmtMin(sch.end)}</span>`
+    : "";
 
   if (sch){
     const pts = [ll(state.depot.geo), ...order.map(navDest), ll(state.depot.geo)];
