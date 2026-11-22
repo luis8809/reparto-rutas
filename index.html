@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruta de Reparto</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --text:#1c2230; --muted:#667085; --line:#e3e6eb;
+  --accent:#0b62d6; --accent-ink:#fff;
+  --del:#0b62d6; --pick:#d9480f; --mix:#7c3aed;
+  --ok:#16794a; --ok-bg:#e3f5ea; --warn:#9a6700; --warn-bg:#fff4d6; --bad:#b42318; --bad-bg:#fde8e7;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11141a; --card:#1a1f27; --text:#e6e9ef; --muted:#98a2b3; --line:#2c333e;
+    --accent:#4c8ff5; --accent-ink:#0b1220;
+    --del:#4c8ff5; --pick:#f0814a; --mix:#a78bfa;
+    --ok:#4ade80; --ok-bg:#12301f; --warn:#f5c451; --warn-bg:#3a2e0d; --bad:#f87171; --bad-bg:#3b1414;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11141a; --card:#1a1f27; --text:#e6e9ef; --muted:#98a2b3; --line:#2c333e;
+  --accent:#4c8ff5; --accent-ink:#0b1220;
+  --del:#4c8ff5; --pick:#f0814a; --mix:#a78bfa;
+  --ok:#4ade80; --ok-bg:#12301f; --warn:#f5c451; --warn-bg:#3a2e0d; --bad:#f87171; --bad-bg:#3b1414;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:14px 16px;border-bottom:1px solid var(--line);background:var(--card);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+header .trip{color:var(--muted);font-size:13px}
+main{max-width:1200px;margin:0 auto;padding:16px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+h2{font-size:15px;margin:0 0 10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+input,select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;min-width:0}
+input[type=file]{padding:6px}
+button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:6px;padding:7px 12px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.grow{flex:1 1 220px}
+#map{height:420px;border-radius:8px;border:1px solid var(--line)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px}
+.kpi{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.kpi b{display:block;font-size:20px}
+.kpi span{font-size:12px;color:var(--muted)}
+.kpi.bad{border-color:var(--bad);background:var(--bad-bg)}
+.status{font-size:13px;color:var(--muted);min-height:1.4em}
+.stops{display:grid;gap:8px}
+.stop{border:1px solid var(--line);border-left:5px solid var(--del);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px}
+.stop.R{border-left-color:var(--pick)} .stop.M{border-left-color:var(--mix)}
+.stop.done{opacity:.55}
+.num{font-weight:700;font-size:18px;min-width:28px;text-align:center;grid-row:span 3}
+.title{font-weight:600}
+.meta{font-size:13px;color:var(--muted)}
+.right{text-align:right;grid-row:span 3;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.eta{font-weight:700;font-size:16px;white-space:nowrap}
+.right label{white-space:nowrap}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;margin-right:6px;color:#fff;background:var(--del);vertical-align:1px}
+.tag.R{background:var(--pick)} .tag.M{background:var(--mix)}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;font-weight:600}
+.badge.ok{background:var(--ok-bg);color:var(--ok)} .badge.warn{background:var(--warn-bg);color:var(--warn)} .badge.bad{background:var(--bad-bg);color:var(--bad)}
+.fix{display:flex;gap:6px;margin-top:4px;grid-column:2/3}
+.fix input{flex:1}
+.notes{font-size:12px;color:var(--muted);grid-column:2/3;white-space:pre-line}
+.stop>*{min-width:0;overflow-wrap:anywhere}
+select{max-width:100%}
+.move{display:flex;gap:4px}
+.move button{padding:4px 9px}
+.alert{color:var(--bad);font-weight:600;font-size:13px}
+.links{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.hint{font-size:12px;color:var(--muted);margin:6px 0 0}
+.pin{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;color:#fff;font:700 12px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);background:#0b62d6}
+.pin.R{background:#d9480f} .pin.M{background:#7c3aed} .pin.depot{background:#111;border-radius:6px}
+.pin.warn{outline:3px solid #f5b400}
+@media (max-width:600px){
+  .stop{grid-template-columns:auto 1fr;grid-auto-flow:row dense}
+  .right{grid-row:auto;grid-column:2/3;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:8px}
+  .num{grid-row:span 4}
+  #map{height:320px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Ruta de reparto</h1>
+  <span class="trip" id="tripLabel"></span>
+</header>
+<main>
+  <section>
+    <h2>1. Datos</h2>
+    <div class="row">
+      <label class="grow">Excel de operaciones (.xlsx)
+        <input type="file" id="file" accept=".xlsx,.xls,.csv">
+      </label>
+      <label id="tripWrap" hidden>Viaje
+        <select id="trip"></select>
+      </label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="grow">Almacén (salida y regreso)
+        <input id="depot" value="C/ RUMANIA 2-4, 28821">
+      </label>
+      <label>Salida
+        <input id="start" type="time" value="07:00">
+      </label>
+      <label>Min. por parada
+        <input id="service" type="number" min="0" value="10" style="width:80px">
+      </label>
+      <label>Capacidad (kg)
+        <input id="capacity" type="number" min="0" placeholder="sin límite" style="width:110px">
+      </label>
+      <label>Orden
+        <select id="mode">
+          <option value="split">Entregas primero, luego recogidas</option>
+          <option value="mixed">Mixto (ruta más corta)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="optimize" disabled>Calcular ruta</button>
+      <button id="regeo" disabled>Reintentar direcciones</button>
+    </div>
+    <p class="status" id="status">Carga el Excel para empezar (export de operaciones o Excel de paradas).</p>
+  </section>
+
+  <section id="resultSec" hidden>
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0" id="stopsTitle">2. Paradas</h2>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div id="map"></div>
+    <p class="hint">Puedes arrastrar un pin para corregir su posición. Los pines con borde amarillo están aproximados. Con ↑ ↓ cambias el orden a mano (p. ej. para cumplir una ventana horaria) y se recalculan los tiempos.</p>
+    <div class="links" id="links"></div>
+    <div class="stops" id="stops"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ---------- Utilidades ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const clean = s => String(s ?? "").replace(/_x000d_/gi, "").replace(/\r/g, "").replace(/\t+/g, " ").trim();
+const fmtKg = n => Math.round(n).toLocaleString("es-ES") + " kg";
+const fmtMin = m => { m = Math.round(m); return String(Math.floor(m/60)%24).padStart(2,"0") + ":" + String(m%60).padStart(2,"0"); };
+const fmtDur = s => { const m = Math.round(s/60); return m >= 60 ? `${Math.floor(m/60)} h ${m%60} min` : `${m} min`; };
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+function setStatus(msg){ $("#status").textContent = msg; }
+
+// ---------- Normalización de direcciones ----------
+function cleanAddr(a){
+  let s = clean(a).toUpperCase();
+  s = s.replace(/\(.*?\)/g, " ");
+  s = s.replace(/\s(P\.?\s?I\.?|POL\.?\s?IND\.?|POL[IÍ]GONO\s+INDUSTRIAL)(\s.*)?$/, " ");
+  s = s.replace(/\b(NAVES?|LOCAL|PUERTA|PTA\.?|PLANTA|OFICINA)\b.*$/, " ");
+  s = s.replace(/,?\s*KM\.?\s*$/, "");
+  s = s.replace(/^C\/\s*/, "CALLE ").replace(/\bAVDA?\.?\s+/g, "AVENIDA ").replace(/\bAV\.\s*/g, "AVENIDA ")
+       .replace(/\bCTRA\.?\s+/g, "CARRETERA ").replace(/\bPOL\.\s*/g, "POLIGONO ").replace(/\bPZA\.?\s+/g, "PLAZA ")
+       .replace(/\bP[º°]\s*/g, "PASEO ");
+  s = s.replace(/(\d+)\s*-\s*\d+/g, "$1");            // 2-4 -> 2
+  s = s.replace(/,\s*(\d+)\s*,\s*\d+\s*$/, ", $1");     // "43, 45" -> "43"
+  s = s.replace(/\s*,\s*/g, ", ").replace(/\s+/g, " ").replace(/[,\s-]+$/, "").trim();
+  return s;
+}
+
+// Ventana horaria en texto libre: "10 A 17 HORAS", "9h to 14h", "7.00h -15.00h", "07:00 - 15:00"
+function parseWindow(t){
+  if (!t) return null;
+  const re = /(\d{1,2})(?:[:.](\d{2}))?\s*h?(?:oras|rs)?\s*(?:-|–|\ba\b|\bto\b|\bhasta\b|\bal\b)\s*(\d{1,2})(?:[:.](\d{2}))?/i;
+  const m = clean(t).match(re);
+  if (!m) return null;
+  const from = +m[1]*60 + (+m[2]||0), to = +m[3]*60 + (+m[4]||0);
+  if (+m[1] > 23 || +m[3] > 23 || to <= from) return null;
+  return { from, to };
+}
+
+// ---------- Lectura del Excel ----------
+const state = { rows: [], stops: [], depot: null, route: null, trip: "" };
+
+function readRows(wb, fileName){
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const data = XLSX.utils.sheet_to_json(ws, { defval: null });
+  const heads = Object.keys(data[0] || {}).map(h => h.trim().toLowerCase());
+  if (!heads.includes("operation type") && heads.includes("cp") && heads.includes("tipo")) return readStopsSheet(data, fileName);
+  return data.map(r => {
+    const g = name => { const k = Object.keys(r).find(k => k.trim().toLowerCase() === name.toLowerCase()); return k ? r[k] : null; };
+    const op = clean(g("Operation Type"));
+    const isPick = /pick/i.test(op);
+    const instrLoad = clean(g("Load Instructions")), instrUnload = clean(g("Unload Instructions"));
+    return {
+      op, kind: isPick ? "R" : "E",
+      trip: clean(g("Trip ID")),
+      ref: clean(g("Order Code ID") || g("Order ID")),
+      name: clean(isPick ? (g("Loading Name") || g("Consignor Name")) : (g("Unloading Name") || g("Consignee Name"))),
+      addr: clean(isPick ? g("Loading Address") : g("Unloading Address")),
+      zip: clean(isPick ? g("Loading Zip") : g("Unloading Zip")),
+      extra: clean(isPick ? "" : g("Unloading Name 2")),
+      qty: +g("HU Qty") || 0, unit: clean(g("HU ID")),
+      kg: +g("Gross Weight") || 0,
+      note: isPick ? instrLoad : [instrUnload, instrLoad].filter(Boolean).join("\n"),
+      window: parseWindow(isPick ? instrLoad : instrUnload),
+      tailLift: !!(isPick ? g("Tail Lift Pickup") : g("Tail Lift Delivery")) || /trampilla|tail ?lift/i.test(instrLoad + instrUnload),
+      depotAddr: clean(isPick ? g("Unloading Address") : g("Loading Address")),
+      depotZip: clean(isPick ? g("Unloading Zip") : g("Loading Zip")),
+    };
+  }).filter(r => r.addr || r.zip);
+}
+
+// Excel de paradas generado/revisado (hoja "Paradas"): una fila por parada
+function readStopsSheet(data, fileName){
+  const trip = (String(fileName || "").match(/[A-Z]{6}\d{6,}/) || [""])[0];
+  const out = [];
+  for (const r of data){
+    const g = name => { const k = Object.keys(r).find(k => k.trim().toLowerCase() === name.toLowerCase()); return k ? r[k] : null; };
+    const tipo = clean(g("Tipo")).toLowerCase();
+    if (!/entrega|recogida/.test(tipo)) continue;            // salta la fila TOTAL y vacías
+    const base = {
+      op: clean(g("Tipo")), trip, ref: clean(g("Referencias")), name: clean(g("Cliente")),
+      addr: clean(g("Dirección (original)") || g("Dirección")), zip: clean(g("CP")), extra: "",
+      query: clean(g("Dirección para buscar")), qty: "", unit: clean(g("Bultos")),
+      note: clean(g("Notas")), window: parseWindow(g("Ventana horaria")),
+      tailLift: /s[ií]/i.test(clean(g("Trampilla"))), depotAddr: "", depotZip: "",
+    };
+    const kgE = +g("Kg entrega") || 0, kgR = +g("Kg recogida") || 0;
+    if (/entrega/.test(tipo)) out.push({ ...base, kind: "E", kg: kgE });
+    if (/recogida/.test(tipo)) out.push({ ...base, kind: "R", kg: kgR, unit: /entrega/.test(tipo) ? "" : base.unit });
+  }
+  return out.filter(r => r.addr || r.zip);
+}
+
+// Correcciones de direcciones conocidas (dirección original|CP -> texto de búsqueda).
+// Las que corrijas en la app se guardan en este navegador y tienen prioridad.
+const ADDRESS_FIXES = {
+  "COMERCIAL H 2-4|28521": "CENTRO COMERCIAL H2O, RIVAS-VACIAMADRID",
+  "ARES 2 LOCAL B 39-40 P|28051": "CENTRO COMERCIAL LA GAVIA, MADRID",
+  "CARRETERA DE ARGANDA A CHINCHON, KM|28500": "CARRETERA DE ARGANDA A CHINCHON KM 2, ARGANDA DEL REY",
+};
+const fixKey = (addr, zip) => clean(addr).toUpperCase().replace(/\s+/g, " ") + "|" + zip;
+const queryFor = (addr, zip) => store.get("fix:" + fixKey(addr, zip)) || ADDRESS_FIXES[fixKey(addr, zip)] || cleanAddr(addr);
+
+function buildStops(rows){
+  const map = new Map();
+  for (const r of rows){
+    const key = cleanAddr(r.addr) + "|" + r.zip;
+    if (!map.has(key)) map.set(key, { key, name: r.name, addr: r.addr, zip: r.zip, extra: r.extra, items: [], query: store.get("fix:" + fixKey(r.addr, r.zip)) || r.query || queryFor(r.addr, r.zip) });
+    map.get(key).items.push(r);
+  }
+  return [...map.values()].map((s, i) => {
+    const kinds = new Set(s.items.map(x => x.kind));
+    const wins = s.items.map(x => x.window).filter(Boolean);
+    return Object.assign(s, {
+      id: i,
+      kind: kinds.size > 1 ? "M" : [...kinds][0],
+      names: [...new Set(s.items.map(x => x.name))].join(" / "),
+      kgE: s.items.filter(x => x.kind === "E").reduce((a, x) => a + x.kg, 0),
+      kgR: s.items.filter(x => x.kind === "R").reduce((a, x) => a + x.kg, 0),
+      qty: s.items.map(x => `${x.qty} ${x.unit}`.trim()).filter(Boolean).join(" + "),
+      window: wins.length ? { from: Math.max(...wins.map(w => w.from)), to: Math.min(...wins.map(w => w.to)) } : null,
+      notes: [...new Set(s.items.flatMap(x => x.note.split("\n")).map(l => l.replace(/^[|\s.\/]+/, "").trim()).filter(l => /[a-z0-9]/i.test(l)))].join("\n"),
+      tailLift: s.items.some(x => x.tailLift),
+      geo: null,
+    });
+  });
+}
+
+function guessDepot(rows){
+  const count = {};
+  for (const r of rows) if (r.depotAddr) { const k = `${r.depotAddr}, ${r.depotZip}`; count[k] = (count[k]||0) + 1; }
+  return Object.entries(count).sort((a,b) => b[1]-a[1])[0]?.[0];
+}
+
+// ---------- Geocodificación (Nominatim / OpenStreetMap, máx. 1 petición/s) ----------
+let lastCall = 0;
+async function nominatim(params){
+  const wait = 1100 - (Date.now() - lastCall);
+  if (wait > 0) await sleep(wait);
+  lastCall = Date.now();
+  const u = new URL("https://nominatim.openstreetmap.org/search");
+  Object.entries({ format: "jsonv2", addressdetails: 1, limit: 1, countrycodes: "es", "accept-language": "es", ...params })
+    .forEach(([k, v]) => u.searchParams.set(k, v));
+  const res = await fetch(u);
+  if (!res.ok) throw new Error("Geocodificador HTTP " + res.status);
+  return (await res.json())[0] || null;
+}
+
+const GEO_V = "geo2:";   // versión de caché: v2 busca solo cerca del CP
+const km = (a, b) => { const r = Math.PI/180, x = Math.sin((b.lat-a.lat)*r/2)**2 + Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lon-a.lon)*r/2)**2; return 12742 * Math.asin(Math.sqrt(x)); };
+
+// Centro y municipio de un código postal (se cachea)
+async function cpInfo(zip){
+  if (!zip) return null;
+  const k = "cp:" + zip, c = store.get(k); if (c) return c;
+  const hit = await nominatim({ postalcode: zip, country: "España" });
+  if (!hit) return null;
+  const a = hit.address || {};
+  const out = { lat: +hit.lat, lon: +hit.lon, town: a.city || a.town || a.village || a.municipality || "" };
+  store.set(k, out); return out;
+}
+
+async function geocode(query, zip){
+  const cacheKey = GEO_V + query + "|" + zip;
+  const old = store.get("geo:" + query + "|" + zip);
+  const cached = store.get(cacheKey) || (old?.label === "Ajustado a mano" ? old : null);
+  if (cached) return cached;
+  const cp = await cpInfo(zip);
+  let out = null;
+  if (query){
+    const town = cp?.town && !query.toUpperCase().includes(cp.town.toUpperCase()) ? cp.town : "";
+    const withDe = query.replace(/^(AVENIDA|CALLE|CARRETERA|PASEO|PLAZA|CAMINO|RONDA) (?!DE |DEL |LA |EL |LOS |LAS )/i, "$1 DE ");
+    // Solo se aceptan resultados dentro de la zona del CP (evita calles homónimas de otros pueblos)
+    const area = cp ? { viewbox: [cp.lon - 0.12, cp.lat + 0.09, cp.lon + 0.12, cp.lat - 0.09].join(","), bounded: 1 } : {};
+    const tries = [{ q: [query, zip, town].filter(Boolean).join(", "), ...area }];
+    if (withDe !== query) tries.push({ q: [withDe, town].filter(Boolean).join(", "), ...area });
+    tries.push({ q: [query, town].filter(Boolean).join(", "), ...area });
+    for (const t of tries){
+      const hit = await nominatim(t);
+      if (!hit) continue;
+      const p = { lat: +hit.lat, lon: +hit.lon };
+      if (cp && km(p, cp) > 10) continue;
+      const pc = hit.address?.postcode || "";
+      const cand = { ...p, level: !pc || pc === zip ? "ok" : "revisar", label: hit.display_name };
+      if (cand.level === "ok"){ out = cand; break; }
+      out = out || cand;
+    }
+  }
+  if (!out && cp) out = { lat: cp.lat, lon: cp.lon, level: "cp", label: "Centro del CP " + zip + (cp.town ? " (" + cp.town + ")" : "") };
+  out = out || { level: "error" };
+  if (out.level !== "error") store.set(cacheKey, out);
+  return out;
+}
+
+async function geocodeAll(onlyBad){
+  const btns = [$("#optimize"), $("#regeo")];
+  btns.forEach(b => b.disabled = true);
+  try {
+    const dq = $("#depot").value.trim();
+    const dm = dq.match(/^(.*?),?\s*(\d{5})\s*$/);
+    if (!state.depot || state.depot.query !== dq){
+      setStatus("Localizando almacén…");
+      state.depot = { query: dq, geo: await geocode(cleanAddr(dm ? dm[1] : dq), dm ? dm[2] : "") };
+    }
+    const todo = state.stops.filter(s => !onlyBad || !s.geo || s.geo.level !== "ok");
+    let n = 0;
+    for (const s of todo){
+      setStatus(`Localizando direcciones… ${++n}/${todo.length}`);
+      try { s.geo = await geocode(s.query, s.zip); } catch (e) { s.geo = { level: "error", label: e.message }; }
+      render();
+    }
+    const bad = state.stops.filter(s => s.geo?.level !== "ok").length;
+    setStatus(bad ? `${bad} parada(s) con dirección aproximada o no encontrada: revísalas (edita la dirección o arrastra el pin).` : "Todas las direcciones localizadas.");
+  } catch (e) {
+    setStatus("Error al geocodificar: " + e.message + ". ¿Tienes conexión?");
+  } finally {
+    btns.forEach(b => b.disabled = false);
+    render();
+  }
+}
+
+// ---------- Optimización (OSRM) ----------
+async function osrmTrip(start, stops, end){
+  const pts = [start, ...stops.map(s => s.geo), ...(end ? [end] : [])];
+  const coords = pts.map(p => `${p.lon.toFixed(6)},${p.lat.toFixed(6)}`).join(";");
+  const url = `https://router.project-osrm.org/trip/v1/driving/${coords}?source=first&destination=${end ? "last" : "any"}&roundtrip=false&overview=full&geometries=geojson`;
+  const res = await fetch(url);
+  const j = await res.json();
+  if (j.code !== "Ok") throw new Error("Servidor de rutas: " + (j.message || j.code));
+  const order = stops.map((s, i) => ({ s, idx: j.waypoints[i + 1].waypoint_index })).sort((a, b) => a.idx - b.idx).map(x => x.s);
+  const trip = j.trips[0];
+  return { order, legs: trip.legs.map(l => ({ duration: l.duration, distance: l.distance })), geometry: trip.geometry.coordinates.map(c => [c[1], c[0]]) };
+}
+
+async function optimize(){
+  const missing = state.stops.filter(s => !s.geo || s.geo.level === "error");
+  if (!state.depot?.geo?.lat) return setStatus("No se ha localizado el almacén. Corrige su dirección.");
+  if (missing.length) return setStatus(`Faltan ${missing.length} parada(s) sin localizar. Corrígelas antes de calcular.`);
+  $("#optimize").disabled = true;
+  setStatus("Calculando ruta óptima…");
+  try {
+    const D = state.depot.geo;
+    let result;
+    const firstPhase = state.stops.filter(s => s.kind !== "R"), pickups = state.stops.filter(s => s.kind === "R");
+    if ($("#mode").value === "mixed" || !firstPhase.length || !pickups.length){
+      result = await osrmTrip(D, state.stops, D);
+    } else {
+      const a = await osrmTrip(D, firstPhase, null);
+      const last = a.order[a.order.length - 1].geo;
+      const b = await osrmTrip(last, pickups, D);
+      result = { order: [...a.order, ...b.order], legs: [...a.legs, ...b.legs], geometry: [...a.geometry, ...b.geometry] };
+    }
+    state.route = result;
+    setStatus("Ruta calculada.");
+  } catch (e) {
+    setStatus("Error al calcular la ruta: " + e.message);
+  } finally {
+    $("#optimize").disabled = false;
+    render();
+  }
+}
+
+// Recalcula tiempos para un orden fijado a mano (sin reoptimizar)
+async function recomputeFixedOrder(){
+  const D = state.depot.geo, pts = [D, ...state.route.order.map(s => s.geo), D];
+  const coords = pts.map(p => `${p.lon.toFixed(6)},${p.lat.toFixed(6)}`).join(";");
+  setStatus("Recalculando tiempos…");
+  try {
+    const j = await (await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`)).json();
+    if (j.code !== "Ok") throw new Error(j.message || j.code);
+    state.route.legs = j.routes[0].legs.map(l => ({ duration: l.duration, distance: l.distance }));
+    state.route.geometry = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+    setStatus("Orden manual aplicado.");
+  } catch (e) { setStatus("Error al recalcular: " + e.message); }
+  render();
+}
+
+function schedule(){
+  const r = state.route; if (!r) return null;
+  const [h, m] = ($("#start").value || "07:00").split(":").map(Number);
+  const service = +$("#service").value || 0;
+  let t = h*60 + m, dist = 0;
+  let load = r.order.reduce((a, s) => a + s.kgE, 0);
+  const startLoad = load; let maxLoad = load;
+  const rows = r.order.map((s, i) => {
+    t += r.legs[i].duration / 60; dist += r.legs[i].distance;
+    const arrive = t; let wait = 0, late = false;
+    if (s.window){ if (t < s.window.from){ wait = s.window.from - t; t = s.window.from; } if (arrive > s.window.to) late = true; }
+    t += service;
+    load = load - s.kgE + s.kgR; maxLoad = Math.max(maxLoad, load);
+    return { s, arrive, wait, late, load };
+  });
+  const back = r.legs[r.order.length];
+  if (back){ t += back.duration / 60; dist += back.distance; }
+  return { rows, end: t, dist, startLoad, maxLoad, totalMin: t - (h*60 + m) };
+}
+
+// ---------- Enlaces ----------
+const ll = p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+// Destino para Google Maps: coordenadas si la posición es fiable; si no, el texto (Google geocodifica mejor)
+const navDest = s => s.geo?.level === "ok" ? ll(s.geo) : `${s.query}, ${s.zip}, España`;
+function gmapsLinks(points){
+  // Google Maps admite un número limitado de paradas intermedias por enlace: se trocea en tramos de 9.
+  const out = [];
+  for (let i = 0; i < points.length - 1; i += 10){
+    const seg = points.slice(i, i + 11);
+    const u = new URL("https://www.google.com/maps/dir/");
+    u.searchParams.set("api", "1"); u.searchParams.set("travelmode", "driving");
+    u.searchParams.set("origin", seg[0]); u.searchParams.set("destination", seg[seg.length - 1]);
+    if (seg.length > 2) u.searchParams.set("waypoints", seg.slice(1, -1).join("|"));
+    out.push({ url: u.toString(), from: i, to: i + seg.length - 1 });
+  }
+  return out;
+}
+
+function exportCsv(){
+  const sch = schedule(); if (!sch) return;
+  const head = ["Orden","Tipo","Cliente","Dirección","CP","Bultos","Kg entrega","Kg recogida","Ventana","Llegada","Espera min","Fuera de ventana","Carga tras parada kg","Referencias","Notas","Lat","Lon"];
+  const lines = sch.rows.map((x, i) => [i+1, {E:"Entrega",R:"Recogida",M:"Entrega+Recogida"}[x.s.kind], x.s.names, x.s.addr, x.s.zip, x.s.qty,
+    x.s.kgE, x.s.kgR, x.s.window ? fmtMin(x.s.window.from)+"-"+fmtMin(x.s.window.to) : "", fmtMin(x.arrive), Math.round(x.wait), x.late ? "SÍ" : "",
+    Math.round(x.load), x.s.items.map(it => it.ref).join(" "), x.s.notes.replace(/\n/g, " | "), x.s.geo.lat, x.s.geo.lon]);
+  const csv = "﻿" + [head, ...lines].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `ruta_${state.trip || "reparto"}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- Mapa ----------
+let map, layer;
+function drawMap(order){
+  if (!map){
+    map = L.map("map");
+    // Teselas de CARTO (los servidores de openstreetmap.org bloquean páginas abiertas como archivo local)
+    const carto = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+      { maxZoom: 19, subdomains: "abcd", attribution: "© OpenStreetMap © CARTO" }).addTo(map);
+    let errors = 0;
+    carto.on("tileerror", () => {
+      if (++errors !== 5) return;   // varios fallos seguidos: cambiar a Esri
+      map.removeLayer(carto);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 19, attribution: "© Esri" }).addTo(map);
+    });
+    layer = L.layerGroup().addTo(map);
+    map.setView([40.42, -3.6], 10);
+  }
+  layer.clearLayers();
+  const bounds = [];
+  if (state.route) L.polyline(state.route.geometry, { color: "#0b62d6", weight: 4, opacity: .7 }).addTo(layer);
+  if (state.depot?.geo?.lat){
+    L.marker([state.depot.geo.lat, state.depot.geo.lon], { icon: L.divIcon({ className: "", html: '<div class="pin depot">A</div>', iconSize: [26,26] }) })
+      .bindPopup("Almacén: " + esc(state.depot.query)).addTo(layer);
+    bounds.push([state.depot.geo.lat, state.depot.geo.lon]);
+  }
+  order.forEach((s, i) => {
+    if (!s.geo?.lat) return;
+    const warn = s.geo.level !== "ok" ? " warn" : "";
+    const mk = L.marker([s.geo.lat, s.geo.lon], { draggable: true,
+      icon: L.divIcon({ className: "", html: `<div class="pin ${s.kind}${warn}">${state.route ? i+1 : "•"}</div>`, iconSize: [26,26] }) })
+      .bindPopup(`<b>${esc(s.names)}</b><br>${esc(s.addr)} · ${esc(s.zip)}`).addTo(layer);
+    mk.on("dragend", () => {
+      const p = mk.getLatLng();
+      s.geo = { lat: p.lat, lon: p.lng, level: "ok", label: "Ajustado a mano" };
+      store.set(GEO_V + s.query + "|" + s.zip, s.geo);
+      state.route = null; setStatus("Posición corregida. Vuelve a calcular la ruta."); render();
+    });
+    bounds.push([s.geo.lat, s.geo.lon]);
+  });
+  if (bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+}
+
+// ---------- Render ----------
+function geoBadge(g){
+  if (!g) return '<span class="badge warn">pendiente</span>';
+  return { ok: '<span class="badge ok">localizada</span>', revisar: '<span class="badge warn">revisar (CP distinto)</span>',
+           cp: '<span class="badge warn">aprox. por CP</span>', error: '<span class="badge bad">no encontrada</span>' }[g.level] || "";
+}
+
+function render(){
+  $("#resultSec").hidden = !state.stops.length;
+  if (!state.stops.length) return;
+  const sch = schedule();
+  const order = sch ? sch.rows.map(x => x.s) : state.stops;
+  const done = store.get("done:" + state.trip) || {};
+  const nE = state.stops.filter(s => s.kind !== "R").length, nR = state.stops.filter(s => s.kind !== "E").length;
+  const cap = +$("#capacity").value || 0;
+
+  $("#stopsTitle").textContent = sch ? "3. Ruta optimizada" : "2. Paradas";
+  let k = `<div class="kpi"><b>${state.stops.length}</b><span>paradas (${nE} entrega · ${nR} recogida)</span></div>
+           <div class="kpi"><b>${state.rows.length}</b><span>órdenes</span></div>`;
+  if (sch){
+    k += `<div class="kpi"><b>${(sch.dist/1000).toFixed(0)} km</b><span>distancia total</span></div>
+          <div class="kpi"><b>${fmtDur(sch.totalMin*60)}</b><span>duración (con paradas)</span></div>
+          <div class="kpi"><b>${fmtMin(sch.end)}</b><span>regreso al almacén</span></div>
+          <div class="kpi${cap && sch.maxLoad > cap ? " bad" : ""}"><b>${fmtKg(sch.maxLoad)}</b><span>carga máxima (salida ${fmtKg(sch.startLoad)})</span></div>`;
+    const late = sch.rows.filter(x => x.late).length;
+    if (late) k += `<div class="kpi bad"><b>${late}</b><span>llegadas fuera de ventana</span></div>`;
+  }
+  $("#kpis").innerHTML = k;
+
+  if (sch){
+    const pts = [ll(state.depot.geo), ...order.map(navDest), ll(state.depot.geo)];
+    const links = gmapsLinks(pts);
+    $("#links").innerHTML = links.map((l, i) =>
+      `<a class="btn" target="_blank" rel="noopener" href="${esc(l.url)}">Google Maps ${links.length > 1 ? `tramo ${i+1} (${l.from === 0 ? "almacén" : "parada " + l.from} → ${l.to === pts.length-1 ? "almacén" : "parada " + l.to})` : "(ruta completa)"}</a>`
+    ).join("") + `<button id="csv">Exportar CSV</button>`;
+    $("#csv").onclick = exportCsv;
+  } else $("#links").innerHTML = "";
+
+  $("#stops").innerHTML = order.map((s, i) => {
+    const r = sch?.rows[i];
+    const isDone = done[s.key];
+    const win = s.window ? `Ventana ${fmtMin(s.window.from)}–${fmtMin(s.window.to)}` : "";
+    const kg = [s.kgE ? `entrega ${fmtKg(s.kgE)}` : "", s.kgR ? `recoge ${fmtKg(s.kgR)}` : ""].filter(Boolean).join(" · ");
+    const showFix = !s.geo || s.geo.level !== "ok";
+    return `<div class="stop ${s.kind}${isDone ? " done" : ""}">
+      <div class="num">${sch ? i + 1 : "–"}</div>
+      <div><span class="tag ${s.kind}">${{E:"ENTREGA",R:"RECOGIDA",M:"ENT+REC"}[s.kind]}</span><span class="title">${esc(s.names)}</span></div>
+      <div class="right">
+        ${r ? `<span class="eta">${fmtMin(r.arrive)}</span>` : ""}
+        ${s.geo?.lat ? `<a class="btn" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(navDest(s))}">Navegar</a>` : ""}
+        ${sch ? `<span class="move"><button data-mv="-1" data-i="${i}" ${i === 0 ? "disabled" : ""} aria-label="Subir">↑</button><button data-mv="1" data-i="${i}" ${i === order.length - 1 ? "disabled" : ""} aria-label="Bajar">↓</button></span>` : ""}
+        ${sch ? `<label style="flex-direction:row;align-items:center"><input type="checkbox" data-done="${esc(s.key)}" ${isDone ? "checked" : ""}> hecho</label>` : ""}
+      </div>
+      <div class="meta">${esc(s.addr)} · ${esc(s.zip)}${s.extra ? " · " + esc(s.extra) : ""} ${geoBadge(s.geo)}</div>
+      <div class="meta">${esc(s.qty)} · ${kg}${win ? " · " + win : ""}${r ? ` · carga tras parada ${fmtKg(r.load)}` : ""}${s.tailLift ? " · <b>necesita trampilla</b>" : ""}</div>
+      ${r && (r.late || r.wait > 0) ? `<div class="alert" style="grid-column:2/3">${r.late ? "Llega fuera de la ventana horaria" : `Espera ${Math.round(r.wait)} min a que abra`}</div>` : ""}
+      ${s.notes ? `<div class="notes">${esc(s.notes)}</div>` : ""}
+      ${showFix ? `<div class="fix"><input data-q="${s.id}" value="${esc(s.query)}" aria-label="Dirección para buscar"><button data-fix="${s.id}">Buscar</button></div>` : ""}
+    </div>`;
+  }).join("");
+
+  drawMap(order);
+}
+
+// ---------- Eventos ----------
+$("#file").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (typeof XLSX === "undefined" || typeof L === "undefined")
+    return setStatus("No se han podido cargar las librerías (sin conexión o el visor bloquea scripts). Abre el archivo en Chrome, Edge o Safari con Internet.");
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+    const all = readRows(wb, f.name);
+    if (!all.length) return setStatus("No se han encontrado paradas en el archivo. Usa el export de operaciones (columnas Operation Type, Loading/Unloading Address…) o el Excel de paradas.");
+    const trips = [...new Set(all.map(r => r.trip))];
+    $("#trip").innerHTML = trips.map(t => `<option>${esc(t || "(sin viaje)")}</option>`).join("");
+    $("#tripWrap").hidden = trips.length < 2;
+    state.allRows = all;
+    loadTrip(trips[0]);
+  } catch (err) { setStatus("No se pudo leer el archivo: " + err.message); }
+});
+$("#trip").addEventListener("change", e => loadTrip(e.target.value === "(sin viaje)" ? "" : e.target.value));
+
+function loadTrip(trip){
+  state.trip = trip;
+  state.rows = state.allRows.filter(r => r.trip === trip);
+  state.stops = buildStops(state.rows);
+  state.route = null;
+  const d = guessDepot(state.rows); if (d) $("#depot").value = d;
+  $("#tripLabel").textContent = trip ? "Viaje " + trip : "";
+  $("#optimize").disabled = $("#regeo").disabled = !state.stops.length;
+  render();
+  geocodeAll(false);
+}
+
+$("#optimize").onclick = optimize;
+$("#regeo").onclick = () => { state.depot = null; geocodeAll(true); };
+["#start", "#service", "#capacity"].forEach(s => $(s).addEventListener("input", render));
+$("#mode").addEventListener("change", () => { if (state.route) optimize(); });
+$("#depot").addEventListener("change", () => { state.route = null; geocodeAll(true); });
+
+$("#stops").addEventListener("click", async e => {
+  if (e.target.dataset.mv){
+    const i = +e.target.dataset.i, j = i + +e.target.dataset.mv, o = state.route.order;
+    [o[i], o[j]] = [o[j], o[i]];
+    return recomputeFixedOrder();
+  }
+  const id = e.target.dataset.fix; if (id === undefined) return;
+  const s = state.stops[+id];
+  s.query = $(`[data-q="${id}"]`).value.trim();
+  store.set("fix:" + fixKey(s.addr, s.zip), s.query);
+  e.target.disabled = true; setStatus("Buscando " + s.query + "…");
+  try { s.geo = await geocode(s.query, s.zip); } catch (err) { s.geo = { level: "error" }; }
+  state.route = null;
+  setStatus(s.geo.level === "ok" ? "Dirección localizada." : "Sigue sin localizarse con precisión: prueba otra forma o arrastra el pin.");
+  render();
+});
+$("#stops").addEventListener("keydown", e => { if (e.key === "Enter" && e.target.dataset.q !== undefined) $(`[data-fix="${e.target.dataset.q}"]`).click(); });
+$("#stops").addEventListener("change", e => {
+  const key = e.target.dataset.done; if (key === undefined) return;
+  const done = store.get("done:" + state.trip) || {};
+  done[key] = e.target.checked; store.set("done:" + state.trip, done); render();
+});
+</script>
+</body>
+</html>
