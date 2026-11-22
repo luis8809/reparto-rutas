@@ -82,6 +82,11 @@ select{max-width:100%}
 .itin .step b{margin-right:4px}
 .itin .step.R{border-color:var(--pick)} .itin .step.M{border-color:var(--mix)}
 .itin .arrow{color:var(--muted)}
+.rev{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;border:1px solid var(--line);border-left:5px solid var(--del);border-radius:8px;padding:10px 12px}
+.rev.R{border-left-color:var(--pick)}
+.rev .wide{grid-column:1/-1}
+.rev .acts{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rev .src{font-size:12px;color:var(--muted)}
 .pin{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;color:#fff;font:700 12px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);background:#0b62d6}
 .pin.R{background:#d9480f} .pin.M{background:#7c3aed} .pin.depot{background:#111;border-radius:6px}
 .pin.warn{outline:3px solid #f5b400}
@@ -104,6 +109,9 @@ select{max-width:100%}
     <div class="row">
       <label class="grow">Excel de operaciones (.xlsx)
         <input type="file" id="file" accept=".xlsx,.xls,.csv">
+      </label>
+      <label class="grow">Añadir albaranes (PDF o foto)
+        <input type="file" id="docs" accept="application/pdf,image/*" multiple>
       </label>
       <label id="tripWrap" hidden>Viaje
         <select id="trip"></select>
@@ -136,6 +144,14 @@ select{max-width:100%}
     <button id="regeo" disabled>Reintentar direcciones</button>
     <span class="status" id="status">Carga el Excel para empezar (export de operaciones o Excel de paradas).</span>
   </div>
+
+  <section id="reviewSec" hidden>
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0">Albaranes leídos: revisa antes de añadir</h2>
+      <div class="row"><button id="addAll" class="primary">Añadir todos</button><button id="discardAll">Descartar todos</button></div>
+    </div>
+    <div class="stops" id="review"></div>
+  </section>
 
   <section id="resultSec" hidden>
     <div class="row" style="justify-content:space-between;margin-bottom:10px">
@@ -210,7 +226,7 @@ function readRows(wb, fileName){
     return {
       op, kind: isPick ? "R" : "E",
       trip: clean(g("Trip ID")),
-      ref: clean(g("Order Code ID") || g("Order ID")),
+      ref: clean(g("Order Code ID") || g("Order ID")), wb: clean(g("WB No")),
       name: clean(isPick ? (g("Loading Name") || g("Consignor Name")) : (g("Unloading Name") || g("Consignee Name"))),
       addr: clean(isPick ? g("Loading Address") : g("Unloading Address")),
       zip: clean(isPick ? g("Loading Zip") : g("Unloading Zip")),
@@ -660,6 +676,203 @@ function render(){
 
   drawMap(order);
 }
+
+// ---------- Albaranes (PDF con texto o foto con OCR) ----------
+const loadScript = src => new Promise((ok, ko) => {
+  if (document.querySelector(`script[src="${src}"]`)) return ok();
+  const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = () => ko(new Error("No se pudo cargar " + src)); document.head.appendChild(el);
+});
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const TESS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+const norm = t => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+
+// Palabras con posición normalizada (0..1, y hacia abajo) de la 1ª página de un PDF
+async function pdfWords(file){
+  await loadScript(PDFJS);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const page = await pdf.getPage(1);
+  const vp = page.getViewport({ scale: 1 });
+  const tc = await page.getTextContent();
+  const words = [];
+  for (const it of tc.items){
+    if (!it.str || !it.str.trim()) continue;
+    const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+    words.push({ s: it.str.trim(), x: x / vp.width, y: (y - (it.height || 8)) / vp.height });
+  }
+  return words;
+}
+
+// OCR de una foto (en el navegador, sin enviar la imagen a ningún sitio)
+async function ocrWords(file, onProgress){
+  await loadScript(TESS);
+  const worker = await Tesseract.createWorker("spa", 1, { logger: m => m.status === "recognizing text" && onProgress?.(m.progress) });
+  try {
+    const bmp = await createImageBitmap(file);
+    const { data } = await worker.recognize(file);
+    return data.words.map(w => ({ s: w.text, x: w.bbox.x0 / bmp.width, y: w.bbox.y0 / bmp.height }));
+  } finally { await worker.terminate(); }
+}
+
+function toLines(words){
+  const ws = [...words].sort((a, b) => a.y - b.y || a.x - b.x), lines = [];
+  for (const w of ws){
+    const l = lines.find(l => Math.abs(l.y - w.y) < 0.006);
+    if (l) l.w.push(w); else lines.push({ y: w.y, w: [w] });
+  }
+  lines.forEach(l => { l.w.sort((a, b) => a.x - b.x); });
+  return lines;
+}
+// Texto de una línea limitado a una franja horizontal
+const seg = (l, x0, x1) => l.w.filter(w => w.x >= x0 && w.x < x1).map(w => w.s).join(" ").trim();
+
+const HEAD = /^(REMITENTE|DIRECCION DE (RECOGIDA|ENTREGA)|DESTINATARIO|CANTIDAD Y DESCRIPCION|NUMERO DE NIF|REF:|COND ENTREGA)/;
+function block(lines, labelRe, x0, x1){
+  const i = lines.findIndex(l => labelRe.test(norm(seg(l, x0, x1))));
+  if (i < 0) return [];
+  const out = [];
+  for (let k = i + 1; k < lines.length; k++){
+    const t = seg(lines[k], x0, x1); if (!t) continue;
+    if (HEAD.test(norm(t)) || lines[k].y - lines[i].y > 0.12) break;
+    out.push(t.replace(/\s+TEL:.*$/i, "").trim());
+  }
+  return out.filter(Boolean);
+}
+function splitAddress(lines){
+  const zi = lines.findIndex(t => /\b(?:[A-Z]{2}-)?\d{5}\b/.test(t));
+  if (zi < 0) return { name: lines[0] || "", street: lines.slice(1).join(", "), zip: "", town: "" };
+  const m = lines[zi].match(/^(.*?)(?:[A-Z]{2}-)?(\d{5})\s*(.*)$/);
+  const before = lines.slice(0, zi);
+  let name = "", street = "";
+  if (before.length >= 2){ name = before[0]; street = before.slice(1).join(", "); }
+  else if (before.length === 1){ if (/\d/.test(before[0])) street = before[0]; else name = before[0]; }
+  if (m[1].trim()) street = [street, m[1].trim().replace(/[,\s]+$/, "")].filter(Boolean).join(", ");
+  return { name, street, zip: m[2], town: clean(m[3]).replace(/\(.*\)/, "").replace(/[,.\s]+$/, "").trim() };
+}
+
+// Orden de transporte DHL Freight (y formatos parecidos): columna izquierda = direcciones
+function parseDoc(words, fileName){
+  const lines = toLines(words), all = norm(lines.map(l => seg(l, 0, 1)).join("\n"));
+  const L = [0, 0.36], R = [0.62, 1];
+  const term = norm(block(lines, /^TERMINAL DE ORIGEN/, ...R).join(" "));
+  const depot = norm($("#depot").value);
+  const originIsUs = /\bMAD\b|COSLADA|RUMANIA/.test(term) || (depot && term.includes(depot.split(",")[0]));
+  let kind = originIsUs ? "R" : "E";
+  let addr = block(lines, kind === "E" ? /^DIRECCION DE ENTREGA/ : /^DIRECCION DE RECOGIDA/, ...L);
+  if (!addr.length) addr = block(lines, kind === "E" ? /^DESTINATARIO/ : /^REMITENTE/, ...L);
+  // Sin plantilla reconocible (otro albarán / foto): primera línea con CP y la anterior
+  if (!addr.length){
+    const txt = lines.map(l => seg(l, 0, 1));
+    const zi = txt.findIndex(t => /\b\d{5}\b\s+[A-ZÁÉÍÓÚÑ]/i.test(t));
+    if (zi > 0) addr = txt.slice(Math.max(0, zi - 2), zi + 1);
+  }
+  const a = splitAddress(addr);
+  const orderNo = (all.match(/\b0\d{10}\b/) || [""])[0];
+  const code = (all.match(/\b[A-Z]{3}-[A-Z]{2}-\d{7}\b/) || [""])[0];
+  const date = (all.match(/FECHA:\s*(\d{2}\/\d{2}\/\d{4})/) || [, ""])[1];
+  const qtyM = lines.map(l => seg(l, 0, 0.85)).map(norm).find(t => /^\d{1,4}\s+[A-Z]{2,4}\s+-\s/.test(t));
+  const kgs = [...all.matchAll(/(\d+(?:[.,]\d+)?)\s*KG\b/g)].map(m => parseFloat(m[1].replace(",", ".")));
+  return {
+    file: fileName, kind, name: a.name, street: a.street, zip: a.zip, town: a.town,
+    qty: qtyM ? qtyM.match(/^\d{1,4}\s+[A-Z]{2,4}/)[0] : "", kg: kgs.length ? kgs[kgs.length - 1] : 0,
+    ref: code || orderNo, wb: orderNo, date,
+  };
+}
+
+state.pending = [];
+async function readDocs(files){
+  let n = 0;
+  for (const f of files){
+    n++;
+    try {
+      let words;
+      if (/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)){
+        setStatus(`Leyendo ${f.name} (${n}/${files.length})…`);
+        words = await pdfWords(f);
+        if (words.length < 20){ setStatus(`${f.name}: PDF escaneado, aplicando OCR…`); words = await ocrWordsFromPdf(f); }
+      } else {
+        setStatus(`Reconociendo texto de ${f.name} (${n}/${files.length})… la primera vez tarda más`);
+        words = await ocrWords(f, p => setStatus(`Reconociendo texto de ${f.name}… ${Math.round(p * 100)}%`));
+      }
+      state.pending.push(parseDoc(words, f.name));
+    } catch (e) { state.pending.push({ file: f.name, error: e.message, kind: "E", name: "", street: "", zip: "", town: "", qty: "", kg: 0, ref: "", wb: "" }); }
+    renderReview();
+  }
+  setStatus(`${files.length} albarán(es) leído(s). Revisa los datos y pulsa «Añadir».`);
+}
+// PDF sin texto (escaneado): se rasteriza la 1ª página y se pasa por OCR
+async function ocrWordsFromPdf(file){
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const page = await pdf.getPage(1), vp = page.getViewport({ scale: 2.5 });
+  const c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+  const blob = await new Promise(r => c.toBlob(r, "image/png"));
+  return ocrWords(blob);
+}
+
+function renderReview(){
+  $("#reviewSec").hidden = !state.pending.length;
+  $("#review").innerHTML = state.pending.map((d, i) => `
+    <div class="rev ${d.kind}" data-i="${i}">
+      <div class="wide src">${esc(d.file)}${d.wb ? " · Orden " + esc(d.wb) : ""}${d.date ? " · " + esc(d.date) : ""}${d.error ? ` · <span class="alert">${esc(d.error)}</span>` : ""}${!d.zip ? ' · <span class="alert">No se ha encontrado el CP: complétalo</span>' : ""}</div>
+      <label>Tipo<select data-f="kind"><option value="E" ${d.kind === "E" ? "selected" : ""}>Entrega</option><option value="R" ${d.kind === "R" ? "selected" : ""}>Recogida</option></select></label>
+      <label class="wide">Cliente<input data-f="name" value="${esc(d.name)}"></label>
+      <label class="wide">Dirección<input data-f="street" value="${esc(d.street)}"></label>
+      <label>CP<input data-f="zip" value="${esc(d.zip)}" inputmode="numeric" maxlength="5"></label>
+      <label>Municipio<input data-f="town" value="${esc(d.town)}"></label>
+      <label>Bultos<input data-f="qty" value="${esc(d.qty)}"></label>
+      <label>Kg<input data-f="kg" type="number" step="0.1" value="${d.kg || ""}"></label>
+      <label>Referencia<input data-f="ref" value="${esc(d.ref)}"></label>
+      <div class="acts"><button class="primary" data-add="${i}">Añadir parada</button><button data-del="${i}">Descartar</button></div>
+    </div>`).join("");
+}
+$("#review").addEventListener("input", e => {
+  const card = e.target.closest(".rev"), f = e.target.dataset.f; if (!card || !f) return;
+  const d = state.pending[+card.dataset.i]; d[f] = f === "kg" ? +e.target.value || 0 : e.target.value.trim();
+  if (f === "kind") card.className = "rev " + d.kind;
+});
+
+function docToRow(d){
+  return {
+    op: "Albarán", kind: d.kind, trip: state.trip || "", ref: d.ref, wb: d.wb, name: d.name,
+    addr: d.street, zip: d.zip, extra: d.town, qty: "", unit: d.qty, kg: d.kg || 0,
+    note: "Añadida desde albarán " + (d.wb || d.file), window: null, tailLift: false, depotAddr: "", depotZip: "",
+    query: cleanAddr(d.street) + (d.town ? ", " + d.town.toUpperCase() : ""),
+  };
+}
+function addDocs(idxs){
+  const rows = [], dup = [], bad = [];
+  state.allRows = state.allRows || []; state.rows = state.rows || [];
+  for (const i of idxs){
+    const d = state.pending[i];
+    if (!d.street || !/^\d{5}$/.test(d.zip)){ bad.push(d.file); continue; }
+    const exists = state.allRows.some(r => (d.wb && r.wb === d.wb) || (d.ref && r.ref === d.ref));
+    if (exists){ dup.push(d.wb || d.ref); continue; }
+    rows.push(docToRow(d));
+  }
+  const keep = idxs.filter(i => bad.includes(state.pending[i].file));
+  state.pending = state.pending.filter((d, i) => !idxs.includes(i) || keep.includes(i));
+  if (rows.length){
+    state.allRows.push(...rows); state.rows.push(...rows);
+    const prev = new Map(state.stops.map(s => [s.key, s.geo]));
+    state.stops = buildStops(state.rows);
+    state.stops.forEach(s => { if (prev.get(s.key)) s.geo = prev.get(s.key); });
+    state.route = null;
+    $("#optimize").disabled = $("#regeo").disabled = !state.stops.length;
+  }
+  renderReview(); render();
+  const msg = [rows.length && `${rows.length} parada(s) añadida(s).`, dup.length && `Ya estaban en la lista: ${dup.join(", ")}.`, bad.length && `Falta dirección o CP en: ${bad.join(", ")}.`].filter(Boolean).join(" ");
+  setStatus(msg || "Nada que añadir.");
+  if (rows.length) geocodeAll(true);
+}
+$("#review").addEventListener("click", e => {
+  if (e.target.dataset.add !== undefined) addDocs([+e.target.dataset.add]);
+  if (e.target.dataset.del !== undefined){ state.pending.splice(+e.target.dataset.del, 1); renderReview(); }
+});
+$("#addAll").onclick = () => addDocs(state.pending.map((_, i) => i));
+$("#discardAll").onclick = () => { state.pending = []; renderReview(); };
+$("#docs").addEventListener("change", e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) readDocs(fs); });
 
 // ---------- Eventos ----------
 $("#file").addEventListener("change", async e => {

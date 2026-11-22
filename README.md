@@ -5,13 +5,16 @@ App web (un solo `index.html`, sin servidor ni claves) para planificar la ruta d
 ## Uso
 1. Abre la app (GitHub Pages o el `index.html` en Chrome/Edge/Safari con Internet).
 2. Carga el Excel: export de operaciones (`Operation Type`, `Loading/Unloading Address`…) o el Excel de paradas revisado.
-3. Revisa las paradas en amarillo: edita la dirección o arrastra el pin. Las correcciones se guardan en el navegador.
-4. Pulsa **Calcular ruta**: orden de paradas, ETA, ventanas horarias, carga del camión, enlaces a Google Maps y exportación CSV.
+3. Opcional: **Añadir albaranes (PDF o foto)**. Lee la dirección de entrega (o de recogida si sale de nuestro almacén), CP, municipio, bultos, kg y referencias; revisas los datos y pulsas «Añadir». Funciona también sin Excel. Los PDF con texto se leen exactos; las fotos pasan por OCR en el propio navegador (Tesseract.js), sin subir la imagen a ningún sitio.
+4. Revisa las paradas en amarillo: edita la dirección o arrastra el pin. Las correcciones se guardan en el navegador.
+5. Pulsa **Calcular ruta**: orden de paradas, ETA, ventanas horarias, carga del camión, enlaces a Google Maps y exportación CSV.
 
 ## Servicios usados (gratuitos, públicos)
 - Geocodificación: Nominatim (OpenStreetMap), máx. 1 petición/s, limitada a la zona de cada código postal.
 - Optimización de ruta: servidor de demostración de OSRM (sin garantías de disponibilidad).
-- Mapa: teselas de CARTO (Esri de respaldo).
+- Mapa: OpenStreetMap / CARTO / Esri con cambio automático.
+- Lectura de albaranes: pdf.js (PDF con texto) y Tesseract.js (fotos y PDF escaneados).
+- Si el servidor de rutas no responde, la ruta se calcula en el navegador (línea recta, km estimados).
 
 ## Limitaciones
 - Un solo vehículo; el optimizador no respeta ventanas horarias (solo avisa; se reordena a mano con ↑ ↓).
